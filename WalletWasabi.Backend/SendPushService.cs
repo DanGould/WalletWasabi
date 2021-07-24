@@ -1,17 +1,18 @@
 using System;
-using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using WalletWasabi.Backend.Data;
-using WalletWasabi.Backend.Models;
 using WalletWasabi.Logging;
 
 namespace WalletWasabi.Backend
@@ -42,28 +43,17 @@ namespace WalletWasabi.Backend
 
 		private string GenerateAuthenticationHeader()
 		{
-			var headerBytes = JsonSerializer.SerializeToUtf8Bytes(new {
-				alg = "ES256",
-				kid = _auth_key_id
-			});
-			var header = Convert.ToBase64String(headerBytes);
-
-			var claimsBytes = JsonSerializer.SerializeToUtf8Bytes(new
-			{
-				iss = _teamId,
-				iat = DateTime.Now
-			});
-			var claims = Convert.ToBase64String(claimsBytes);
-
 			var p8KeySpan = File.ReadAllBytes(KeyPath).AsSpan();
 			var signer = ECDsa.Create();
 			signer.ImportPkcs8PrivateKey(p8KeySpan, out int _);
-			var dataToSign = Encoding.UTF8.GetBytes($"{header}.{claims}");
-			var signatureBytes = signer.SignData(dataToSign, HashAlgorithmName.SHA256);
+			var creds = new SigningCredentials(new ECDsaSecurityKey(signer), SecurityAlgorithms.EcdsaSha256);
+			var issuer = _teamId;
 
-			var signature = Convert.ToBase64String(signatureBytes);
+			var token = new JwtSecurityToken(issuer,
+				notBefore: DateTime.Now,
+				signingCredentials: creds );
 
-			return $"{header}.{claims}.{signature}";
+			return new JwtSecurityTokenHandler().WriteToken(token);
 		}
 
 		public async Task SendNotificationsAsync(bool isDebug)
