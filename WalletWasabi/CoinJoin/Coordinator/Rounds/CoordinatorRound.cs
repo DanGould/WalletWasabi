@@ -67,6 +67,7 @@ namespace WalletWasabi.CoinJoin.Coordinator.Rounds
 
 				Alices = new List<Alice>();
 				QueuedAlices = new List<Alice>();
+				QueuedInputs = new HashSet<OutPoint>();
 				Bobs = new List<Bob>();
 
 				Logger.LogInfo($"Round ({RoundId}): New round is created.\n\t" +
@@ -123,6 +124,7 @@ namespace WalletWasabi.CoinJoin.Coordinator.Rounds
 
 		private List<Alice> Alices { get; }
 		private List<Alice> QueuedAlices { get; }
+		private HashSet<OutPoint> QueuedInputs { get; }
 		private List<Bob> Bobs { get; } // Do not make it a hashset or do not make Bob IEquitable!!!
 
 		private List<UnblindedSignature> RegisteredUnblindedSignatures { get; }
@@ -1228,7 +1230,6 @@ namespace WalletWasabi.CoinJoin.Coordinator.Rounds
 					throw new InvalidOperationException("Adding Alice is only allowed in InputRegistration phase.");
 				}
 				Alices.Add(alice);
-				QueuedAlices.Add(alice);
 			}
 
 			StartAliceTimeout(alice.UniqueId);
@@ -1384,6 +1385,7 @@ namespace WalletWasabi.CoinJoin.Coordinator.Rounds
 				}
 				foreach (var id in ids)
 				{
+					QueuedAlices.RemoveAll(x => x.UniqueId == id);
 					numberOfRemovedAlices = Alices.RemoveAll(x => x.UniqueId == id && x.State < AliceState.ConnectionConfirmed);
 				}
 			}
@@ -1394,29 +1396,6 @@ namespace WalletWasabi.CoinJoin.Coordinator.Rounds
 			}
 
 			return numberOfRemovedAlices;
-		}
-
-		public int DequeueAlicesBy(params Guid[] ids)
-		{
-			var numberOfDequeuedAlices = 0;
-			using (RoundSynchronizerLock.Lock())
-			{
-				if ((Phase != RoundPhase.InputRegistration && Phase != RoundPhase.ConnectionConfirmation) || Status != CoordinatorRoundStatus.Running)
-				{
-					throw new InvalidOperationException("Dequeue Alice is only allowed in InputRegistration and ConnectionConfirmation phases.");
-				}
-				foreach (var id in ids)
-				{
-					numberOfDequeuedAlices = QueuedAlices.RemoveAll(x => x.UniqueId == id);
-				}
-			}
-
-			if (numberOfDequeuedAlices > 0)
-			{
-				Logger.LogInfo($"Round ({RoundId}): {numberOfDequeuedAlices} alices are removed.");
-			}
-
-			return numberOfDequeuedAlices;
 		}
 
 		#endregion Modifiers

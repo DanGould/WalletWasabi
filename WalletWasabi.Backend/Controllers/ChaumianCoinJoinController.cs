@@ -304,7 +304,6 @@ namespace WalletWasabi.Backend.Controllers
 					foreach (Guid aliceToRemove in alicesToRemove)
 					{
 						round.RemoveAlicesBy(aliceToRemove);
-						round.DequeueAlicesBy(aliceToRemove);
 					}
 					round.AddAlice(alice);
 
