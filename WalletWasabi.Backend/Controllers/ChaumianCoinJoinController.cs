@@ -298,6 +298,7 @@ namespace WalletWasabi.Backend.Controllers
 						acceptedBlindedOutputScripts.Add(blindedOutputs[i]);
 					}
 
+
 					// Make sure Alice checks work.
 					var alice = new Alice(inputs, networkFeeToPayAfterBaseDenomination, request.ChangeOutputAddress, acceptedBlindedOutputScripts.Select(x => x.BlindedOutput));
 
@@ -305,8 +306,10 @@ namespace WalletWasabi.Backend.Controllers
 					{
 						round.RemoveAlicesBy(aliceToRemove);
 					}
-					round.AddAlice(alice);
 
+					// if alice is counted in queued count already, remove it
+					round.DequeueAnyFamiliarAlice(request.Inputs);
+					round.AddAlice(alice);
 
 					// All checks are good. Sign.
 					var blindSignatures = new List<uint256>();

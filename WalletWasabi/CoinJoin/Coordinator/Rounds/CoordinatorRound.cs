@@ -67,7 +67,6 @@ namespace WalletWasabi.CoinJoin.Coordinator.Rounds
 
 				Alices = new List<Alice>();
 				QueuedAlices = new List<Alice>();
-				QueuedInputs = new HashSet<OutPoint>();
 				Bobs = new List<Bob>();
 
 				Logger.LogInfo($"Round ({RoundId}): New round is created.\n\t" +
@@ -670,7 +669,6 @@ namespace WalletWasabi.CoinJoin.Coordinator.Rounds
 
 			// It is ok to remove these Alices, because these did not get blind signatures.
 			RemoveAlicesBy(alicesNotConfirmConnectionIds.Distinct().ToArray());
-			DequeueAlicesBy(alicesNotConfirmConnectionIds.Distinct().ToArray());
 
 			int aliceCountAfterConnectionConfirmationTimeout = CountAlices();
 			int didNotConfirmCount = AnonymitySet - aliceCountAfterConnectionConfirmationTimeout;
@@ -1221,6 +1219,21 @@ namespace WalletWasabi.CoinJoin.Coordinator.Rounds
 			Logger.LogInfo($"Round ({RoundId}): {nameof(AnonymitySet)} updated: {AnonymitySet}.");
 		}
 
+		public void DequeueAnyFamiliarAlice(IEnumerable<InputProofModel> inputProofs)
+		{
+			foreach (var inputProof in inputProofs)
+			{
+				var outpoint = inputProof.Input;
+				foreach (var alice in QueuedAlices)
+				{
+					if (alice.Inputs.Any(x => x.Outpoint == outpoint))
+					{
+						QueuedAlices.Remove(alice);
+					}
+				}
+			}
+		}
+
 		public void AddAlice(Alice alice)
 		{
 			using (RoundSynchronizerLock.Lock())
@@ -1230,6 +1243,7 @@ namespace WalletWasabi.CoinJoin.Coordinator.Rounds
 					throw new InvalidOperationException("Adding Alice is only allowed in InputRegistration phase.");
 				}
 				Alices.Add(alice);
+				QueuedAlices.Add(alice);
 			}
 
 			StartAliceTimeout(alice.UniqueId);
