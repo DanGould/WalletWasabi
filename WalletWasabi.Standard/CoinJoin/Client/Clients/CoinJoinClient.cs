@@ -39,9 +39,6 @@ namespace WalletWasabi.CoinJoin.Client.Clients
 
 		private long _statusProcessing;
 
-		private double _twosh = 0.333;
-		private double _sevensh = 1.166;
-
 		public CoinJoinClient(
 			WasabiSynchronizer synchronizer,
 			Network network,
@@ -137,6 +134,7 @@ namespace WalletWasabi.CoinJoin.Client.Clients
 				{
 					Logger.LogInfo($"{nameof(CoinJoinClient)} is successfully initialized.");
 
+					var passivePoll = TimeSpan.FromSeconds(30);
 					while (IsRunning)
 					{
 						try
@@ -151,22 +149,23 @@ namespace WalletWasabi.CoinJoin.Client.Clients
 									return;
 								}
 
-								// if mixing >= connConf delay should be less
-								// i.e. we want to make requests more frequenly than normal
+
+								// if mixing >= connConf the delay should be less
+								// make requests more frequenly so as to maintain connection
 								if (State.GetActivelyMixingRounds().Any())
 								{
-									//TODO Instead of 2, 7 use fraction of round time. this is where 7 would kill us.
 									//double delaySeconds = new Random().Next(2, 7) * (1.0 / 6.0);
-									Synchronizer.MaxRequestIntervalForMixing = TimeSpan.FromSeconds(1);
+									int delaySeconds = new Random().Next(1, State.GetSmallestRegistrationTimeout());
+									Synchronizer.MaxRequestIntervalForMixing = TimeSpan.FromSeconds(delaySeconds);
 								}
-								// if we're Queued
 								else if (Interlocked.Read(ref _frequentStatusProcessingIfNotMixing) == 1 || State.GetPassivelyMixingRounds().Any() || State.GetWaitingListCount() > 0)
 								{
-									// TODO Instead of 2, 7 use fraction of round time this TODOTODO input is wrong
-									double rand = double.Parse($"0.{new Random().Next(2, 6)}"); // randomly between every 0.2 * connConfTimeout - 7 and 0.6 * connConfTimeout
-									// TODO ITS AN INT //int delaySeconds = Math.Max(0, (int)((rand * State.GetSmallestRegistrationTimeout()) - _sevensh)); // TODO instead of 7 use round time
-									int delaySeconds = 5;
-									// This formula is not gonna put you even in the ballpark for the right amount of time
+									var delayMagnitude = State.GetRegistrableRoundOrDefault().State.InputRegistrationTimesout - DateTimeOffset.Now > passivePoll
+										? passivePoll.TotalSeconds
+										: State.GetSmallestRegistrationTimeout();
+
+									double rand = double.Parse($"0.{new Random().Next(1, 4)}");
+									int delaySeconds = Math.Max(0, (int)(rand * delayMagnitude));
 									Synchronizer.MaxRequestIntervalForMixing = TimeSpan.FromSeconds(delaySeconds);
 								}
 								else // dormant
@@ -183,9 +182,8 @@ namespace WalletWasabi.CoinJoin.Client.Clients
 						{
 							try
 							{
-								// this is the interval at which the CoinJoinClient
-								// observes its state in relation to
-								// synchronization and the round
+								// the interval at which this CoinJoinClient
+								// evaluates synchronizer timeouts
 								await Task.Delay(500, Cancel.Token).ConfigureAwait(false);
 							}
 							catch (TaskCanceledException ex)
