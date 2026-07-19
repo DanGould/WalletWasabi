@@ -36,3 +36,27 @@ Notes for W3:
   must be excluded from the sandboxed run.
 - payjoin-ffi's in-process `TestServices` (OHTTP relay + directory + test cert, behind
   `_test-utils` feature) is a lighter-weight alternative to spawning payjoin-mailroom.
+
+## W3 resolution notes (2026-07-19)
+
+The harness landed in `WalletWasabi.IntegrationTests/Payjoin/`
+(`[Trait("Category", "PayjoinHarness")]`, excluded from the sandboxed `nix build .#all`
+checkPhase via `--filter "Category!=PayjoinHarness"` in flake.nix; a sandbox canary test
+keeps the exclusion honest). Binaries build from the pinned rust-payjoin worktree — see
+worktree CLAUDE.md "payjoin harness" section for the exact commands.
+
+Valley run (verified 2026-07-19, ~31 s wall after binaries built):
+
+```bash
+nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
+  'cd <worktree> && dotnet test WalletWasabi.IntegrationTests/WalletWasabi.IntegrationTests.csproj --filter "Category=PayjoinHarness"'
+```
+
+Per-table status:
+
+| Test | Status |
+|---|---|
+| Sender round trip (Wasabi sends) | STILL BLOCKED on W1 — skip-stub `WasabiSendsToCliReceiver_RoundTrip` with choreography in the Skip string. cli↔cli equivalent GREEN (`CliToCli_PayjoinRoundTrip_TransactionHasReceiverContribution`). |
+| Receiver round trip (Wasabi receives) | STILL BLOCKED on W2 — skip-stub `CliSendsToWasabiReceiver_AsyncCompletion`. |
+| Sender kill/resume + Receiver kill/resume | cli↔cli both-sides version GREEN (`CliToCli_KilledMidSessionOnBothSides_ResumesFromPersistedStateAndCompletes`, mirrors payjoin-cli e2e choreography). Wasabi-side versions blocked on W1/W2 session persistence. |
+| Expiry/fallback | Infra-down variant GREEN (`CliSender_InfraUnreachable_SessionFailsResumableAndCancelBroadcastsFallback`: session fails with reason, cancel broadcasts fallback, invoice still paid). Timed-expiry variant deferred until the Wasabi fallback policy exists (payjoin-cli expiry markers exist: "Session expired"). |
