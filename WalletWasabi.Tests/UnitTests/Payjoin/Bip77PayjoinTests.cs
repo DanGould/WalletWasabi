@@ -1,7 +1,12 @@
+using System.IO;
+using System.Threading.Tasks;
 using NBitcoin;
+using Payjoin;
 using WalletWasabi.Payjoin;
+using WalletWasabi.Tests.Helpers;
 using WalletWasabi.Userfacing;
 using Xunit;
+using Uri = System.Uri;
 
 namespace WalletWasabi.Tests.UnitTests.Payjoin;
 
@@ -81,9 +86,44 @@ public class Bip77PayjoinTests
 		Assert.Null(uri.PayjoinEndpoint);
 	}
 
-	[Fact(Skip = "Stub: lands with the payjoin-ffi BIP 77 sender. Persist sender session events via JsonSenderSessionPersister, replay with ReplaySenderEventLog, and assert the session resumes in the same state (WithReplyKey / PollingForProposal) with the same fallback tx.")]
-	public void SenderSession_PersistAndReplay_ResumesState()
+	/// <summary>
+	/// Kill-and-resume over the SQLite event log: a sender session created through
+	/// <see cref="WalletWasabi.Payjoin.SenderSessionPersister"/> must replay back to the same
+	/// typestate from a fresh store handle (fresh process, same DB file), fallback tx intact.
+	/// </summary>
+	[Fact]
+	public async Task SenderSession_PersistAndReplay_ResumesState()
 	{
+		string workDir = await Common.GetEmptyWorkDirAsync();
+		string dbPath = Path.Combine(workDir, "sessions.sqlite");
+
+		using var pjUri = PayjoinFfiTestHelpers.CreatePjUri();
+		string endpoint = pjUri.PjEndpoint();
+
+		// The dedup key parser must understand the fragment payjoin-ffi actually emits.
+		Assert.True(Bip77UriParams.TryGetReceiverKey(endpoint, out var receiverKey));
+
+		long sessionId;
+		using (var store = PayjoinSenderSessionStore.FromFile(dbPath))
+		{
+			sessionId = store.CreateSession(endpoint, receiverKey, walletName: "test-wallet").Id;
+			using var senderBuilder = new SenderBuilder(PayjoinMethods.OriginalPsbt(), pjUri);
+			using var initialTransition = senderBuilder.BuildRecommended(1000);
+			using var withReplyKey = initialTransition.Save(new SenderSessionPersister(store, sessionId));
+			Assert.NotNull(withReplyKey);
+		}
+
+		// "App restart": fresh connection over the same file.
+		using (var store = PayjoinSenderSessionStore.FromFile(dbPath))
+		{
+			Assert.Equal(sessionId, Assert.Single(store.GetOpenSessions()).Id);
+
+			using var replay = PayjoinMethods.ReplaySenderEventLog(new SenderSessionPersister(store, sessionId));
+			using var state = replay.State();
+			Assert.IsType<SendSession.WithReplyKey>(state);
+			using var history = replay.SessionHistory();
+			Assert.NotEmpty(history.FallbackTx());
+		}
 	}
 
 	[Fact(Skip = "Stub: lands with the PayjoinManager receiver. Persist receiver session events via JsonReceiverSessionPersister, replay with ReplayReceiverEventLog, and assert the session resumes (Initialized/typestate) and pj_uri/fallback_tx round-trip.")]
