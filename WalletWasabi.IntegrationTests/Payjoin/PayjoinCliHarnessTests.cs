@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Net.Http;
 using System.Threading.Tasks;
 using NBitcoin;
 using NBitcoin.Payment;
@@ -176,6 +177,88 @@ public class PayjoinCliHarnessTests
 		TxOut invoiceOutput = Assert.Single(fallbackTx.Outputs, o => o.ScriptPubKey == url.Address!.ScriptPubKey);
 		Assert.Equal(url.Amount!, invoiceOutput.Value);
 		Assert.Single(fallbackTx.Inputs);
+	}
+
+	[Fact]
+	public async Task CliToCli_OverTls_RoundTripWithRelayKeyBootstrap()
+	{
+		// TLS topology from the contrib/payjoin-fixture shim (TestServices wiring): https
+		// directory with a self-signed cert, relays trusting it. Both cli sides get the cert
+		// as root_certificate; the receiver has NO pre-fetched keys file, so it exercises the
+		// production OHTTP-keys bootstrap through the relay's CONNECT tunnel.
+		string senderWallet = "tls_sender";
+		string receiverWallet = "tls_receiver";
+		RPCClient senderRpc = await _fixture.CreateFundedWalletAsync(senderWallet, Money.Coins(1m)).ConfigureAwait(true);
+		await _fixture.CreateFundedWalletAsync(receiverWallet, Money.Coins(1m)).ConfigureAwait(true);
+
+		PayjoinTestServicesProcess tls = _fixture.TlsServices;
+		using var senderDriver = new PayjoinCliDriver(
+			_fixture.CreateDriverWorkDir("tls-sender"),
+			_fixture.GetWalletRpcUrl(senderWallet),
+			_fixture.RpcUser,
+			_fixture.RpcPassword,
+			ohttpRelayUrls: tls.RelayUrls,
+			pjDirectoryUrls: [tls.DirectoryUrl],
+			rootCertificatePath: tls.CertificatePath);
+		using var receiverDriver = new PayjoinCliDriver(
+			_fixture.CreateDriverWorkDir("tls-receiver"),
+			_fixture.GetWalletRpcUrl(receiverWallet),
+			_fixture.RpcUser,
+			_fixture.RpcPassword,
+			ohttpRelayUrls: tls.RelayUrls,
+			pjDirectoryUrls: [tls.DirectoryUrl],
+			rootCertificatePath: tls.CertificatePath);
+
+		using LineBufferedProcess receiver = receiverDriver.StartReceive(InvoiceAmountSats);
+		string bip21 = await PayjoinCliDriver.WaitForBip21Async(receiver).ConfigureAwait(true);
+		Assert.Contains("https", bip21, StringComparison.OrdinalIgnoreCase);
+
+		using LineBufferedProcess sender = senderDriver.StartSend(bip21);
+		await sender.WaitForExitAsync(TimeSpan.FromSeconds(60)).ConfigureAwait(true);
+		Assert.True(sender.ExitCode == 0, $"payjoin-cli send over TLS failed.{sender.DescribeBuffers()}");
+		string txid = PayjoinCliDriver.ParseSentTxid(sender.StdoutText);
+
+		await receiver.WaitForStdoutLineAsync(
+			line => line.Contains(PayjoinCliDriver.ResponseSuccessfulMarker, StringComparison.Ordinal) && line.Contains(txid, StringComparison.Ordinal),
+			MarkerTimeout,
+			$"receiver '{PayjoinCliDriver.ResponseSuccessfulMarker}' with txid {txid}").ConfigureAwait(true);
+
+		await AssertPayjoinTransactionShapeAsync(senderRpc, txid, bip21).ConfigureAwait(true);
+	}
+
+	[Fact]
+	public async Task CSharpHttpClient_PinnedFixtureCert_BootstrapsOhttpKeysDirectlyAndViaRelayConnectTunnel()
+	{
+		PayjoinTestServicesProcess tls = _fixture.TlsServices;
+		string keysUrl = $"{tls.DirectoryUrl}/ohttp-keys";
+
+		// Default trust must REJECT the self-signed directory cert - proving the pin is load-bearing.
+#pragma warning disable CA2000 // Dispose objects before losing scope - handler ownership transferred to HttpClient
+		using (HttpClient untrusting = new(new SocketsHttpHandler { UseProxy = false }, disposeHandler: true))
+#pragma warning restore CA2000
+		{
+			await Assert.ThrowsAsync<HttpRequestException>(() => untrusting.GetByteArrayAsync(keysUrl)).ConfigureAwait(true);
+		}
+
+		// Pinned trust, direct: the HttpClientHandler callback pattern Wasabi's transport needs.
+		byte[] direct;
+		using (HttpClient pinned = _fixture.CreateTlsPinnedHttpClient())
+		{
+			direct = await pinned.GetByteArrayAsync(keysUrl).ConfigureAwait(true);
+		}
+
+		Assert.NotEmpty(direct);
+
+		// Pinned trust through the OHTTP relay as an https CONNECT proxy - the RFC 9540
+		// bootstrap transport the ffi/Wasabi receiver uses to fetch keys without revealing
+		// its IP to the directory. Same keys must come back.
+		byte[] tunneled;
+		using (HttpClient viaRelay = _fixture.CreateTlsPinnedHttpClient(proxyUrl: tls.RelayUrls[0]))
+		{
+			tunneled = await viaRelay.GetByteArrayAsync(keysUrl).ConfigureAwait(true);
+		}
+
+		Assert.Equal(direct, tunneled);
 	}
 
 	[Fact(Skip = "Blocked on W2: requires Wasabi PayjoinManager (receiver) to produce a BIP21 pj= URI and complete the session. Choreography: start Wasabi receiver session -> capture URI -> payjoin-cli send pays it (receiver may be offline at send; comes up and completes) -> assert receiver input contribution and settlement detection.")]

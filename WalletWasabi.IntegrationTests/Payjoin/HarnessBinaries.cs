@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using WalletWasabi.BundledApps;
+using WalletWasabi.Helpers;
 
 namespace WalletWasabi.IntegrationTests.Payjoin;
 
@@ -25,6 +26,26 @@ public static class HarnessBinaries
 	public static string PayjoinCliPath => Resolve("PAYJOIN_CLI_BIN", Path.Combine(PinnedWorktree, "target", "debug", "payjoin-cli"));
 
 	public static string MailroomPath => Resolve("PAYJOIN_MAILROOM_BIN", Path.Combine(PinnedWorktree, "target", "debug", "payjoin-mailroom"));
+
+	/// <summary>The in-repo TestServices shim (contrib/payjoin-fixture); provides the TLS topology.</summary>
+	public static string PayjoinFixturePath
+	{
+		get
+		{
+			string repoRoot = Path.GetFullPath(Path.Combine(EnvironmentHelpers.GetFullBaseDirectory(), "..", "..", "..", ".."));
+			string path = Environment.GetEnvironmentVariable("PAYJOIN_FIXTURE_BIN") is { Length: > 0 } fromEnv
+				? fromEnv
+				: Path.Combine(repoRoot, "contrib", "payjoin-fixture", "target", "debug", "payjoin-fixture");
+			if (!File.Exists(path))
+			{
+				throw new FileNotFoundException(
+					$"'payjoin-fixture' not found at '{path}' (override with PAYJOIN_FIXTURE_BIN). Build it: nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command cargo build --manifest-path {Path.Combine(repoRoot, "contrib", "payjoin-fixture", "Cargo.toml")}",
+					path);
+			}
+
+			return path;
+		}
+	}
 
 	/// <summary>The bundled bitcoind cannot exec on NixOS, so prefer BITCOIND_EXE when set.</summary>
 	public static string BitcoindPath

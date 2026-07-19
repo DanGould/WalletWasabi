@@ -34,13 +34,19 @@ public sealed partial class PayjoinCliDriver : IDisposable
 
 	private readonly string _workDir;
 	private readonly string _configPath;
+	private readonly string? _rootCertificatePath;
 	private readonly List<LineBufferedProcess> _processes = [];
 
-	public PayjoinCliDriver(string workDir, string walletRpcUrl, string rpcUser, string rpcPassword, IReadOnlyList<string> ohttpRelayUrls, IReadOnlyList<string> pjDirectoryUrls, string? ohttpKeysPath = null)
+	public PayjoinCliDriver(string workDir, string walletRpcUrl, string rpcUser, string rpcPassword, IReadOnlyList<string> ohttpRelayUrls, IReadOnlyList<string> pjDirectoryUrls, string? ohttpKeysPath = null, string? rootCertificatePath = null)
 	{
 		_workDir = workDir;
 		Directory.CreateDirectory(_workDir);
 		_configPath = Path.Combine(_workDir, "config.toml");
+
+		// The root certificate must go on the command line: the config-file `root_certificate`
+		// key is silently ignored at the pinned payjoin-cli (verified empirically; upstream
+		// e2e only ever passes the flag). Requires a payjoin-cli built with _manual-tls.
+		_rootCertificatePath = rootCertificatePath;
 
 		var config = new StringBuilder();
 		config.AppendLine(CultureInfo.InvariantCulture, $"db_path = \"{Path.Combine(_workDir, "payjoin.sqlite")}\"");
@@ -136,10 +142,14 @@ public sealed partial class PayjoinCliDriver : IDisposable
 
 	private LineBufferedProcess StartCli(IEnumerable<string> arguments)
 	{
+		IEnumerable<string> fullArguments = _rootCertificatePath is null
+			? arguments
+			: ["--root-certificate", _rootCertificatePath, .. arguments];
+
 		// The cli reads config.toml from its working directory; RUST_LOG=debug for diagnostics on failure.
 		LineBufferedProcess process = LineBufferedProcess.Start(
 			HarnessBinaries.PayjoinCliPath,
-			arguments,
+			fullArguments,
 			_workDir,
 			new Dictionary<string, string> { ["RUST_LOG"] = "debug" });
 		_processes.Add(process);

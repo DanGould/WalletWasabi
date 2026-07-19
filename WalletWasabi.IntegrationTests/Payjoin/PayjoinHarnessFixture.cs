@@ -26,6 +26,7 @@ public sealed class PayjoinHarnessFixture : IAsyncLifetime
 	private LineBufferedProcess? _bitcoind;
 	private MailroomProcess? _directory;
 	private MailroomProcess? _relay;
+	private PayjoinTestServicesProcess? _tlsServices;
 	private RPCClient? _bankRpc;
 
 	public PayjoinHarnessFixture()
@@ -52,6 +53,37 @@ public sealed class PayjoinHarnessFixture : IAsyncLifetime
 	public MailroomProcess Relay => _relay ?? throw new InvalidOperationException("Fixture not initialized.");
 	public string OhttpKeysPath => Path.Combine(RootDir, "ohttp-keys.bin");
 	public RPCClient BankRpc => _bankRpc ?? throw new InvalidOperationException("Fixture not initialized.");
+
+	/// <summary>TLS topology: TestServices via the contrib/payjoin-fixture shim (self-signed https directory + relays trusting it).</summary>
+	public PayjoinTestServicesProcess TlsServices => _tlsServices ?? throw new InvalidOperationException("Fixture not initialized.");
+
+	/// <summary>
+	/// HttpClient trusting exactly the TLS fixture's self-signed certificate (pinned by DER bytes) —
+	/// the same shape Wasabi's production code needs for its OHTTP transport over https.
+	/// Pass a relay URL as <paramref name="proxyUrl"/> to tunnel https requests through the OHTTP
+	/// relay via CONNECT, the RFC 9540 bootstrap transport.
+	/// </summary>
+	public HttpClient CreateTlsPinnedHttpClient(string? proxyUrl = null)
+	{
+		byte[] pinnedDer = TlsServices.CertificateDer;
+#pragma warning disable CA2000 // Dispose objects before losing scope - handler ownership transferred to HttpClient
+		var handler = new HttpClientHandler
+		{
+			ServerCertificateCustomValidationCallback = (_, cert, _, _) => cert is not null && cert.RawData.AsSpan().SequenceEqual(pinnedDer),
+		};
+		if (proxyUrl is not null)
+		{
+			handler.Proxy = new System.Net.WebProxy(proxyUrl);
+			handler.UseProxy = true;
+		}
+		else
+		{
+			handler.UseProxy = false;
+		}
+
+		return new HttpClient(handler, disposeHandler: true);
+#pragma warning restore CA2000
+	}
 
 	public async Task InitializeAsync()
 	{
@@ -91,6 +123,8 @@ public sealed class PayjoinHarnessFixture : IAsyncLifetime
 		_directory = await MailroomProcess.StartAsync(Path.Combine(RootDir, "directory"), enableV1: true, HttpClient).ConfigureAwait(false);
 		_relay = await MailroomProcess.StartAsync(Path.Combine(RootDir, "relay"), enableV1: false, HttpClient).ConfigureAwait(false);
 		await _directory.FetchOhttpKeysAsync(OhttpKeysPath, HttpClient).ConfigureAwait(false);
+
+		_tlsServices = await PayjoinTestServicesProcess.StartAsync(Path.Combine(RootDir, "tls-services")).ConfigureAwait(false);
 	}
 
 	/// <summary>Creates a fresh wallet holding one confirmed non-coinbase UTXO of the given amount.</summary>
@@ -131,6 +165,7 @@ public sealed class PayjoinHarnessFixture : IAsyncLifetime
 	{
 		_directory?.Dispose();
 		_relay?.Dispose();
+		_tlsServices?.Dispose();
 
 		if (_bitcoind is not null)
 		{
