@@ -1,9 +1,21 @@
 # Deferred tests — BIP 77 async payjoin integration
 
-Unit-test stubs live in `WalletWasabi.Tests/UnitTests/Payjoin/Bip77PayjoinTests.cs`
-(three `Skip`'d facts: sender persistence replay, receiver persistence replay, error
-mapping). They un-skip as the corresponding code lands. The tests below cannot be
-written as unit tests at all and are deferred to the integration harness lane (W3).
+Unit-test stubs live in `WalletWasabi.Tests/UnitTests/Payjoin/Bip77PayjoinTests.cs`.
+Status: **receiver persistence replay is un-skipped and real** (W2); sender replay and
+error mapping remain Skip'd for W1. W2 also added `PayjoinSessionStoreTests` (inputs-
+seen probe defense, event-log semantics) and `Bip77ReceiverTypestateWalkTests` (full
+receiver chain against in-process TestServices with kill/resume + coin reservation).
+The tests below cannot be written as unit tests at all and are deferred to the
+integration harness lane (W3).
+
+## Deferred UI test (W2)
+
+The receive-flow payjoin opt-in (toggle -> session start -> QR/copy swap to pj URI ->
+status line) has no headless Avalonia test; the VM logic is thin over PayjoinManager
+(which is covered), but an Avalonia.Headless.XUnit test of ReceiveAddressViewModel
+with a mocked IWalletModel.Payjoin would pin the degrade-to-plain-address path.
+Deferred: needs a mockable seam for WalletPayjoinModel (currently a concrete class
+over a live manager).
 
 ## Integration tests (blocked on harness lane W3)
 
