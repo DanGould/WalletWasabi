@@ -2,9 +2,11 @@ using System.IO;
 using System.Threading.Tasks;
 using NBitcoin;
 using Payjoin;
+using WalletWasabi.Fluent.Extensions;
 using WalletWasabi.Payjoin;
 using WalletWasabi.Tests.Helpers;
 using WalletWasabi.Userfacing;
+using WalletWasabi.WebClients.PayJoin;
 using Xunit;
 using Uri = System.Uri;
 
@@ -131,8 +133,39 @@ public class Bip77PayjoinTests
 	{
 	}
 
-	[Fact(Skip = "Stub: lands with BIP 77 error surfacing. Map payjoin-ffi errors (ResponseError well-known codes: unavailable, not-enough-money, version-unsupported, original-psbt-rejected; replay/persisted errors incl. expiry) to user-friendly strings via ToUserFriendlyString-style mapping; transient vs fatal must not read the same.")]
+	/// <summary>
+	/// Downgrade reasons must read as plain language. ffi error objects are pointer-backed
+	/// and cannot be fabricated from C#, so the mappable ones are produced through the ffi
+	/// itself; the well-known BIP 78 receiver error codes
+	/// (unavailable/not-enough-money/version-unsupported/original-psbt-rejected) only occur
+	/// on a live response and are exercised by the W3 harness (TODO-TESTS.md).
+	/// </summary>
+	[Fact]
 	public void PayjoinErrors_MapToUserFriendlyStrings()
 	{
+		// A BIP 21 without pj → real PjNotSupported from the ffi.
+		var pjNotSupported = Assert.ThrowsAny<Exception>(() =>
+		{
+			using var ffiUri = global::Payjoin.Uri.Parse("bitcoin:2MuyMrZHkbHbfjudmKUy45dU4P17pjG2szK");
+			using var pjUri = ffiUri.CheckPjSupported();
+		});
+		Assert.Equal(
+			"The payjoin link could not be understood, so the payment was sent as a normal transaction.",
+			Bip77PayjoinClient.FriendlyFfiMessage(pjNotSupported));
+
+		// Anything unexpected reads generically, never as a raw ffi message.
+		Assert.Equal(
+			"Payjoin failed, so the payment was sent as a normal transaction.",
+			Bip77PayjoinClient.FriendlyFfiMessage(new InvalidOperationException("rust panic goo")));
+
+		// PayjoinException messages pass through ToUserFriendlyString verbatim — they are
+		// authored user-facing (dedup, relay exhaustion, poll window).
+		var duplicate = new PayjoinDuplicateSessionException(
+			new PayjoinSenderSessionRecord(1, "https://payjo.in/x#RK1A", "RK1A", "w", null, DateTimeOffset.UtcNow, IsCompleted: false));
+		Assert.Equal("A payjoin to this link is already in progress.", duplicate.ToUserFriendlyString());
+
+		var completedDuplicate = new PayjoinDuplicateSessionException(
+			new PayjoinSenderSessionRecord(1, "https://payjo.in/x#RK1A", "RK1A", "w", null, DateTimeOffset.UtcNow, IsCompleted: true));
+		Assert.Contains("already completed", completedDuplicate.ToUserFriendlyString());
 	}
 }

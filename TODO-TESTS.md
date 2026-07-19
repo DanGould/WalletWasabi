@@ -14,6 +14,8 @@ written as unit tests at all and are deferred to the integration harness lane (W
 | Sender kill/resume | Kill the app between POST and proposal poll; restart; assert `ReplaySenderEventLog` resumes polling and completes (or falls back to original tx on expiry). | W3 harness + sender session persistence. |
 | Receiver kill/resume | Kill the app after session init (URI already shown); restart; assert `ReplayReceiverEventLog` resumes the directory poll and the payment still completes. | W3 harness + receiver session persistence. |
 | Expiry/fallback | Let a sender session expire with the receiver offline; assert fallback tx broadcast policy and user-visible outcome. | W3 harness + fallback policy decision. |
+| Sender happy-path proposal + poll-window degrade (W1 addendum) | The states past `WithReplyKey` need valid OHTTP-encapsulated directory responses, which cannot be fabricated offline: proposal receipt (`Progress` → payjoin tx signed/broadcast), stasis long-poll behavior, and the 60 s window-end typed-cancel degrade (`Bip77PayjoinClient`) are only unit-tested up to the first response. Assert them end-to-end. | W3 harness (mock-HTTP unit tests cover relay failover, garbage response, dedup only). |
+| Well-known receiver error mapping (W1 addendum) | BIP 78 well-known error codes (unavailable / not-enough-money / version-unsupported / original-psbt-rejected) reach the sender only inside a live encrypted response; assert each maps to its `FriendlyFfiMessage` string and shows in the downgrade dialog. | W3 harness (error objects are pointer-backed, not constructible from C#). |
 
 Notes for W3:
 - `nix build .#all` runs `WalletWasabi.IntegrationTests` in the nix sandbox (no network);

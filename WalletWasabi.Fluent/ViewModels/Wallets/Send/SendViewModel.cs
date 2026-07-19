@@ -560,6 +560,23 @@ public partial class SendViewModel : RoutableViewModel
 		{
 			errors.Add(ErrorSeverity.Error, "Payjoin is not possible with hardware wallets.");
 		}
+		else if (parseResult.Value is Address.Bip21Uri { PayjoinEndpoint: { } pjEndpoint } &&
+			Bip77UriParams.TryGetReceiverKey(pjEndpoint, out var receiverKey) &&
+			UiContext.Services.GetHostedService<PayjoinSenderManager>()?.SessionStore is { } sessionStore &&
+			sessionStore.TryFindSession(pjEndpoint, receiverKey, out var existingSession))
+		{
+			if (existingSession.IsCompleted)
+			{
+				// Address/HPKE-key reuse prevention: the send will proceed, but plainly.
+				errors.Add(ErrorSeverity.Warning, "This payjoin link was already used. The payment will be sent as a normal transaction.");
+			}
+			else
+			{
+				// An open session's fallback tx may still be broadcast; paying again on top
+				// of it risks paying twice.
+				errors.Add(ErrorSeverity.Error, "A payjoin to this address is already in progress.");
+			}
+		}
 	}
 
 	private bool TryParseUrl(string? text)
