@@ -60,3 +60,9 @@ Per-table status:
 | Receiver round trip (Wasabi receives) | STILL BLOCKED on W2 — skip-stub `CliSendsToWasabiReceiver_AsyncCompletion`. |
 | Sender kill/resume + Receiver kill/resume | cli↔cli both-sides version GREEN (`CliToCli_KilledMidSessionOnBothSides_ResumesFromPersistedStateAndCompletes`, mirrors payjoin-cli e2e choreography). Wasabi-side versions blocked on W1/W2 session persistence. |
 | Expiry/fallback | Infra-down variant GREEN (`CliSender_InfraUnreachable_SessionFailsResumableAndCancelBroadcastsFallback`: session fails with reason, cancel broadcasts fallback, invoice still paid). Timed-expiry variant deferred until the Wasabi fallback policy exists (payjoin-cli expiry markers exist: "Session expired"). |
+
+TLS addendum (meta-approved shim, same date): `CliToCli_OverTls_RoundTripWithRelayKeyBootstrap`
+(https directory, receiver bootstraps OHTTP keys through the relay CONNECT tunnel) and
+`CSharpHttpClient_PinnedFixtureCert_BootstrapsOhttpKeysDirectlyAndViaRelayConnectTunnel`
+(C# DER-pinned cert-trust + RFC 9540 bootstrap shape for Wasabi's transport) — both GREEN;
+suite 6 passed / 2 W-blocked skips, ~37 s.

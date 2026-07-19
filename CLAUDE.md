@@ -56,6 +56,10 @@ payjoin-cli per role.
 nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
   'cd /home/claude-agent/payjoin/rust-payjoin-wt-wasabi-ffi && cargo build -p payjoin-cli --features _manual-tls,v1 -p payjoin-mailroom'
 
+# One-time: build the TLS TestServices shim (in-repo, ~27 s warm; see contrib/payjoin-fixture/README.md):
+nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
+  'cd /home/claude-agent/payjoin/external-integrations/WalletWasabi-wt-bip77-harness && cargo build --manifest-path contrib/payjoin-fixture/Cargo.toml'
+
 # Run the harness (~31 s wall; needs the #csharp shell for BITCOIND_EXE — the bundled
 # generic-linux bitcoind cannot exec on NixOS; overrides: PAYJOIN_CLI_BIN, PAYJOIN_MAILROOM_BIN):
 nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
@@ -70,10 +74,16 @@ Environment traps the harness already handles (do not "simplify" them away):
   receiver (`--ohttp-keys`-equivalent config): the relay-proxied bootstrap only works via
   CONNECT/WS tunneling to https gateways; over plain HTTP the combined directory+relay
   binary answers proxy-form GETs with its OWN keys ("key identifier unknown" errors).
-- Topology is plain HTTP (provisional): the standalone mailroom binary cannot serve
-  manual TLS (`serve_manual_tls` is a `_manual-tls` library fn main() never calls) and
-  its relay outgoing client trusts webpki roots only. TLS-fidelity shim escalated in
-  `briefs/2026-07-19/wasabi-integration/questions-W3.md`.
+- Two topologies: plain-HTTP (stock mailroom binaries — degradation path) AND TLS via
+  `contrib/payjoin-fixture` (TestServices shim; approved meta answer in
+  `briefs/2026-07-19/wasabi-integration/questions-W3.md`). The standalone mailroom
+  binary cannot serve manual TLS (`serve_manual_tls` is a `_manual-tls` library fn
+  main() never calls) and its relay outgoing client trusts webpki roots only.
+- payjoin-cli's config-file `root_certificate` key is silently ignored at the pin —
+  pass `--root-certificate` as a CLI flag (the driver does).
+- Out-of-workspace cargo builds do NOT inherit rust-payjoin's `[patch.crates-io]`:
+  any crate depending on payjoin-test-utils/payjoin-mailroom by version silently pulls
+  crates.io releases instead of the pin. The shim's Cargo.toml mirrors the patch.
 
 Pre-commit hook: `.githooks/pre-commit` (junk-blocker + reminders). Install once per clone:
 `cp .githooks/pre-commit "$(git rev-parse --git-path hooks)/pre-commit" && chmod +x $_`
