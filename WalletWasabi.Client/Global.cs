@@ -715,6 +715,18 @@ public class Global
 				tx => TransactionBroadcaster.SendTransactionAsync(tx),
 				txid => TransactionStore.TryGetTransaction(txid, out _)),
 			"Payjoin Sender Manager");
+
+		var payjoinConfiguration = new PayjoinConfiguration(
+			Config.PayjoinDirectoryUri,
+			Config.PayjoinOhttpRelays,
+			// Receiver-paid fee cap for input/output contributions; no fee-estimation hook
+			// exists in payjoin-ffi yet (parity with the BTCPay plugin's cap).
+			MaxFeeRateSatPerVb: 1000,
+			TorEnabled: Config.UseTor != TorMode.Disabled);
+
+		HostedServices.Register<PayjoinManager>(
+			() => new PayjoinManager(DataDir, Network, payjoinConfiguration, WalletManager.GetWalletsAsync, ExternalSourcesHttpClientFactory, TransactionBroadcaster),
+			"Payjoin Manager");
 	}
 
 	private void RegisterCoinJoinComponents(Uri coordinatorUri)

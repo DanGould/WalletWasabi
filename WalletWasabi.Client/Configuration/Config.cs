@@ -59,7 +59,9 @@ public class Config
 			[nameof(FeeRateEstimationProvider)] = GetStringValue("FeeRateEstimationProvider", PersistentConfig.FeeRateEstimationProvider, cliArgs),
 			[nameof(ExternalTransactionBroadcaster)] = GetStringValue("ExternalTransactionBroadcaster", PersistentConfig.ExternalTransactionBroadcaster, cliArgs),
 			[nameof(DropUnconfirmedTransactionsAfterDays)] = GetLongValue("MaxDaysInMempool", PersistentConfig.MaxDaysInMempool, cliArgs),
-			[nameof(ExperimentalFeatures)] = GetStringArrayValue("ExperimentalFeatures", PersistentConfig.ExperimentalFeatures.ToArray(), cliArgs)
+			[nameof(ExperimentalFeatures)] = GetStringArrayValue("ExperimentalFeatures", PersistentConfig.ExperimentalFeatures.ToArray(), cliArgs),
+			[nameof(PayjoinDirectoryUri)] = GetStringValue("PayjoinDirectoryUri", value: "https://payjo.in", cliArgs),
+			[nameof(PayjoinOhttpRelays)] = GetStringArrayValue("PayjoinOhttpRelays", ["https://pj.bobspacebkk.com", "https://ohttp.achow101.com", "https://ohttp.cakewallet.com"], cliArgs)
 		};
 
 		// Check if any config value is overridden (either by an environment value, or by a CLI argument).
@@ -113,6 +115,8 @@ public class Config
 			[nameof(ExternalTransactionBroadcaster)] = "Third party transaction broadcaster. Available broadcasters are (default) MempoolSpace and BlockstreamInfo",
 			[nameof(DropUnconfirmedTransactionsAfterDays)] = "The number of days that unconfirmed wallet transactions will be remembered by Wasabi before dropping them",
 			[nameof(ExperimentalFeatures)] = "Colon-separated list of experimental features to enable. (features available: scripting)",
+			[nameof(PayjoinDirectoryUri)] = "The BIP 77 payjoin directory URL used for receiving payjoins",
+			[nameof(PayjoinOhttpRelays)] = "OHTTP relay URLs used to reach the payjoin directory (at least two recommended for privacy)",
 		};
 	private Dictionary<string, IValue> Data { get; }
 	public PersistentConfig PersistentConfig { get; }
@@ -151,6 +155,9 @@ public class Config
 		Constants.AbsoluteMinInputCount);
 
 	public string[] ExperimentalFeatures => GetEffectiveValue<string[]>(nameof(ExperimentalFeatures));
+
+	public string PayjoinDirectoryUri => GetEffectiveValue<string>(nameof(PayjoinDirectoryUri));
+	public string[] PayjoinOhttpRelays => GetEffectiveValue<string[]>(nameof(PayjoinOhttpRelays));
 
 	public ServiceConfiguration ServiceConfiguration { get; }
 
