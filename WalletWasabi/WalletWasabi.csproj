@@ -61,6 +61,12 @@
 		<None Update="BundledApps\Binaries\win-x64\hwi.exe">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
+		<!-- payjoin-ffi native library (see Payjoin/Ffi/README.md). TargetPath puts it in
+		     the output root where DllImport("payjoin_ffi") probes. -->
+		<None Update="Payjoin\Ffi\libpayjoin_ffi.so">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<TargetPath>libpayjoin_ffi.so</TargetPath>
+		</None>
 		<!-- GEOIP. -->
 		<None Update="Tor\Geoip\geoip">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
