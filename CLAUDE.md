@@ -16,8 +16,8 @@ files and dirties the worktree.
 nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
   'cd /home/claude-agent/payjoin/external-integrations/WalletWasabi-wt-bip77 && dotnet build WalletWasabi.Tests/WalletWasabi.Tests.csproj'
 
-# Fast payjoin-scoped test loop (~10 s wall):
-... dotnet test WalletWasabi.Tests/WalletWasabi.Tests.csproj --filter "FullyQualifiedName~Bip77PayjoinTests|FullyQualifiedName~PayjoinTests"
+# Fast payjoin-scoped test loop (~10 s wall; covers UnitTests/Payjoin/* + legacy BIP 78 tests):
+... dotnet test WalletWasabi.Tests/WalletWasabi.Tests.csproj --filter "FullyQualifiedName~UnitTests.Payjoin|FullyQualifiedName~UnitTests.Transactions.PayjoinTests"
 
 # Unit-test gate (what CI runs inside nix; ~7 min 20 s wall on valley):
 ... dotnet test WalletWasabi.Tests/WalletWasabi.Tests.csproj --filter "FullyQualifiedName~UnitTests"
