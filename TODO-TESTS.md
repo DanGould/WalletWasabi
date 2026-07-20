@@ -56,9 +56,9 @@ Per-table status:
 
 | Test | Status |
 |---|---|
-| Sender round trip (Wasabi sends) | STILL BLOCKED on W1 — skip-stub `WasabiSendsToCliReceiver_RoundTrip` with choreography in the Skip string. cli↔cli equivalent GREEN (`CliToCli_PayjoinRoundTrip_TransactionHasReceiverContribution`). |
-| Receiver round trip (Wasabi receives) | STILL BLOCKED on W2 — skip-stub `CliSendsToWasabiReceiver_AsyncCompletion`. |
-| Sender kill/resume + Receiver kill/resume | cli↔cli both-sides version GREEN (`CliToCli_KilledMidSessionOnBothSides_ResumesFromPersistedStateAndCompletes`, mirrors payjoin-cli e2e choreography). Wasabi-side versions blocked on W1/W2 session persistence. |
+| Sender round trip (Wasabi sends) | **GREEN (WI integration)** — `WasabiSendsToCliReceiver_RoundTrip`: real coin via `WasabiWalletHarness`, production parse (`AddressParser`) + dispatch (`Bip77UriParams.IsBip77`), real `Bip77PayjoinClient` through the real `TransactionFactory` seam; negotiated payjoin broadcasts, cli receiver accepts and completes after confirmation. cli↔cli equivalent also GREEN. |
+| Receiver round trip (Wasabi receives) | **GREEN (WI integration)** — `CliSendsToWasabiReceiver_AsyncCompletion`: real `PayjoinManager` opens the session, the manager instance is disposed (receiver offline), payjoin-cli pays into the void, a fresh manager over the same SQLite store replays and completes (contribution, signing, proposal post, settlement detection, reservation release). This IS the receiver kill/resume story end-to-end. |
+| Sender kill/resume + Receiver kill/resume | cli↔cli both-sides version GREEN (`CliToCli_KilledMidSessionOnBothSides_ResumesFromPersistedStateAndCompletes`, mirrors payjoin-cli e2e choreography). Wasabi receiver-side restart-resume covered by `CliSendsToWasabiReceiver_AsyncCompletion` (manager disposed and re-created mid-session). Wasabi sender-side kill/resume (kill between POST and proposal poll, restart, `PayjoinSenderManager` sweep) deferred to lane W4's pending-send work — the W1 baseline cancels at window end rather than resuming. |
 | Expiry/fallback | Infra-down variant GREEN (`CliSender_InfraUnreachable_SessionFailsResumableAndCancelBroadcastsFallback`: session fails with reason, cancel broadcasts fallback, invoice still paid). Timed-expiry variant deferred until the Wasabi fallback policy exists (payjoin-cli expiry markers exist: "Session expired"). |
 
 TLS addendum (meta-approved shim, same date): `CliToCli_OverTls_RoundTripWithRelayKeyBootstrap`
@@ -66,3 +66,14 @@ TLS addendum (meta-approved shim, same date): `CliToCli_OverTls_RoundTripWithRel
 `CSharpHttpClient_PinnedFixtureCert_BootstrapsOhttpKeysDirectlyAndViaRelayConnectTunnel`
 (C# DER-pinned cert-trust + RFC 9540 bootstrap shape for Wasabi's transport) — both GREEN;
 suite 6 passed / 2 W-blocked skips, ~37 s.
+
+## WI integration notes (2026-07-20)
+
+Both cross-lane stubs are implemented and GREEN (suite: 8 passed / 0 skipped, ~35 s).
+`WasabiWalletHarness` builds a real Wallet stack (KeyManager/Wallet/stores) against the
+harness bitcoind; coins enter via `TransactionProcessor.Process` (the mempool-arrival
+path) instead of filter sync, which has its own integration tests. The W1-addendum rows
+above (happy-path proposal receipt through the real client, window-end degrade against a
+live-but-silent receiver) are partially discharged: `WasabiSendsToCliReceiver_RoundTrip`
+covers the live happy path (Progress → signed payjoin broadcast); the live well-known
+error-code mapping and timed window-end degrade remain deferred.

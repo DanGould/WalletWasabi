@@ -1,11 +1,20 @@
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using NBitcoin;
 using NBitcoin.Payment;
 using NBitcoin.RPC;
+using WalletWasabi.Blockchain.TransactionBuilding;
+using WalletWasabi.Blockchain.TransactionOutputs;
+using WalletWasabi.Blockchain.Transactions;
+using WalletWasabi.Payjoin;
+using WalletWasabi.Userfacing;
+using WalletWasabi.WebClients.PayJoin;
 using Xunit;
+using Transaction = NBitcoin.Transaction;
 
 namespace WalletWasabi.IntegrationTests.Payjoin;
 
@@ -261,14 +270,186 @@ public class PayjoinCliHarnessTests
 		Assert.Equal(direct, tunneled);
 	}
 
-	[Fact(Skip = "Blocked on W2: requires Wasabi PayjoinManager (receiver) to produce a BIP21 pj= URI and complete the session. Choreography: start Wasabi receiver session -> capture URI -> payjoin-cli send pays it (receiver may be offline at send; comes up and completes) -> assert receiver input contribution and settlement detection.")]
-	public void CliSendsToWasabiReceiver_AsyncCompletion()
+	/// <summary>
+	/// The BIP 77 async story, receiver side: the real <see cref="PayjoinManager"/>
+	/// opens a session and the app "exits" (the manager is disposed without ever polling);
+	/// payjoin-cli pays the URI into the void; a fresh manager instance over the same session
+	/// database replays the event log, drives the whole receiver typestate chain (coin
+	/// contribution, signing) and posts the proposal; the sender completes and broadcasts;
+	/// after confirmation the manager detects settlement and closes the session.
+	/// </summary>
+	[Fact]
+	public async Task CliSendsToWasabiReceiver_AsyncCompletion()
 	{
+		await using WasabiWalletHarness wasabi = await WasabiWalletHarness.CreateAsync(_fixture, "cli-to-wasabi").ConfigureAwait(true);
+		SmartCoin contributionCoin = await wasabi.FundAsync(Money.Coins(0.5m)).ConfigureAwait(true);
+
+		RPCClient senderRpc = await _fixture.CreateFundedWalletAsync("wasabireceive_sender", Money.Coins(1m)).ConfigureAwait(true);
+		using var senderDriver = new PayjoinCliDriver(
+			_fixture.CreateDriverWorkDir("wasabireceive-sender"),
+			_fixture.GetWalletRpcUrl("wasabireceive_sender"),
+			_fixture.RpcUser,
+			_fixture.RpcPassword,
+			ohttpRelayUrls: [_fixture.Relay.Url],
+			pjDirectoryUrls: [_fixture.Directory.Url]);
+
+		BitcoinAddress receiveAddress = wasabi.KeyManager.GetNextReceiveKey("payjoin-receive").GetP2wpkhAddress(Network.RegTest);
+
+		// Session creation is the "receive screen" moment; disposing the manager before it
+		// ever ticks is the app going offline with the URI already handed out.
+		string sessionId;
+		string bip21;
+		using (PayjoinManager offlineManager = wasabi.CreatePayjoinManager())
+		{
+			PayjoinSessionState initialState =
+				await offlineManager.StartReceiverSessionAsync(wasabi.Wallet, receiveAddress.ToString(), CancellationToken.None).ConfigureAwait(true);
+			sessionId = initialState.SessionId;
+			bip21 = initialState.PjUri ?? throw new InvalidOperationException("Receiver session has no BIP21 URI.");
+		}
+
+		// Regtest accepts the plain-HTTP directory endpoint (the https-only policy is mainnet-scoped).
+		Assert.Contains("http", bip21, StringComparison.OrdinalIgnoreCase);
+
+		// Wasabi's receive flow issues amount-less URIs while payjoin-cli's sender refuses a
+		// BIP21 without one ("please specify the amount in the Uri"); the amount is the
+		// sender's choice, so splice one in on the sender's side of the hand-off.
+		Money invoiceAmount = Money.Coins(0.001m);
+		string bip21WithAmount = bip21.Insert(bip21.IndexOf('?', StringComparison.Ordinal) + 1, $"amount={invoiceAmount.ToDecimal(MoneyUnit.BTC).ToString(CultureInfo.InvariantCulture)}&");
+
+		// Sender posts the original proposal and keeps polling; nobody is home.
+		using LineBufferedProcess sender = senderDriver.StartSend(bip21WithAmount);
+		await sender.WaitForStdoutLineAsync(
+			line => line.Contains(PayjoinCliDriver.NoResponseYetMarker, StringComparison.Ordinal),
+			MarkerTimeout,
+			$"sender '{PayjoinCliDriver.NoResponseYetMarker}' while the receiver is offline").ConfigureAwait(true);
+
+		// The receiver comes back online: replay from SQLite, fetch the original, contribute,
+		// sign, post the proposal.
+		using PayjoinManager manager = wasabi.CreatePayjoinManager();
+		await manager.StartAsync(CancellationToken.None).ConfigureAwait(true);
+		try
+		{
+			await sender.WaitForExitAsync(TimeSpan.FromSeconds(90)).ConfigureAwait(true);
+			Assert.True(sender.ExitCode == 0, $"payjoin-cli send failed.{sender.DescribeBuffers()}");
+			string txid = PayjoinCliDriver.ParseSentTxid(sender.StdoutText);
+
+			// Receiver input contribution: the coin the manager reserved is spent by the payjoin tx.
+			Transaction payjoinTx = await senderRpc.GetRawTransactionAsync(uint256.Parse(txid)).ConfigureAwait(true);
+			Assert.True(payjoinTx.Inputs.Count > 1, $"Expected a receiver input contribution (inputs > 1), got {payjoinTx.Inputs.Count}.");
+			Assert.Contains(payjoinTx.Inputs, i => i.PrevOut == contributionCoin.Outpoint);
+			TxOut receiverOutput = Assert.Single(payjoinTx.Outputs, o => o.ScriptPubKey == receiveAddress.ScriptPubKey);
+			Assert.True(receiverOutput.Value > invoiceAmount, $"Receiver output should exceed the invoice amount: {receiverOutput.Value} <= {invoiceAmount}.");
+
+			// Settlement detection: confirm the payjoin, let the wallet see it, and the
+			// manager's monitor closes the session and releases the reservation.
+			await _fixture.MineAsync(1).ConfigureAwait(true);
+			await wasabi.ProcessConfirmedTransactionAsync(uint256.Parse(txid)).ConfigureAwait(true);
+			await wasabi.WaitForConditionAsync(
+				() => manager.TryGetSessionState(sessionId)?.Status == PayjoinSessionStatus.Completed,
+				TimeSpan.FromSeconds(30),
+				"payjoin receiver session to complete").ConfigureAwait(true);
+			Assert.Empty(manager.SessionStore.GetActiveSessions());
+			Assert.False(contributionCoin.PayjoinInProgress);
+		}
+		finally
+		{
+			await manager.StopAsync(CancellationToken.None).ConfigureAwait(true);
+		}
 	}
 
-	[Fact(Skip = "Blocked on W1: requires Wasabi BIP77 sender behind IPayjoinClient. Choreography: payjoin-cli receive -> BIP21 -> Wasabi sends -> assert 'Response successful' on cli receiver and payjoin tx shape; directory-down variant must degrade to plain send with a user-visible reason.")]
-	public void WasabiSendsToCliReceiver_RoundTrip()
+	/// <summary>
+	/// The BIP 77 sender side end to end: payjoin-cli issues a pj URI, Wasabi's production
+	/// parse (AddressParser) and dispatch predicate (Bip77UriParams) recognize it, and the
+	/// real <see cref="Bip77PayjoinClient"/> — invoked through the real
+	/// <see cref="TransactionFactory"/> seam, spending a
+	/// real regtest coin — negotiates the payjoin. The result broadcasts, the cli receiver
+	/// posts/accepts, and after confirmation its session completes.
+	/// </summary>
+	[Fact]
+	public async Task WasabiSendsToCliReceiver_RoundTrip()
 	{
+		await using WasabiWalletHarness wasabi = await WasabiWalletHarness.CreateAsync(_fixture, "wasabi-to-cli").ConfigureAwait(true);
+		await wasabi.FundAsync(Money.Coins(0.5m)).ConfigureAwait(true);
+
+		await _fixture.CreateFundedWalletAsync("wasabisend_receiver", Money.Coins(1m)).ConfigureAwait(true);
+		using var receiverDriver = new PayjoinCliDriver(
+			_fixture.CreateDriverWorkDir("wasabisend-receiver"),
+			_fixture.GetWalletRpcUrl("wasabisend_receiver"),
+			_fixture.RpcUser,
+			_fixture.RpcPassword,
+			ohttpRelayUrls: [_fixture.Relay.Url],
+			pjDirectoryUrls: [_fixture.Directory.Url],
+			ohttpKeysPath: _fixture.OhttpKeysPath);
+
+		using LineBufferedProcess receiver = receiverDriver.StartReceive(InvoiceAmountSats);
+		string bip21 = await PayjoinCliDriver.WaitForBip21Async(receiver).ConfigureAwait(true);
+
+		// Production parsing/dispatch: AddressParser surfaces the pj endpoint and the BIP 77
+		// predicate routes it to the ffi client (not the legacy BIP 78 one).
+		var parseResult = AddressParser.Parse(bip21, Network.RegTest);
+		Assert.True(parseResult.IsOk, $"Wasabi could not parse the cli BIP21: {bip21}");
+		var parsedBip21 = Assert.IsType<Address.Bip21Uri>(parseResult.Value);
+		string endpoint = parsedBip21.PayjoinEndpoint ?? throw new InvalidOperationException("No pj endpoint parsed.");
+		Assert.True(Bip77UriParams.IsBip77(endpoint));
+
+		var destination = Assert.IsType<Address.Bitcoin>(parsedBip21.Address).Address;
+		Money invoiceAmount = Money.Coins(parsedBip21.Amount ?? throw new InvalidOperationException("No amount in cli BIP21."));
+
+		// The faithful BIP 21 rebuild mirrors SendViewModel.GetBip77PayjoinClient.
+		string bip21ForFfi = $"bitcoin:{destination}?amount={parsedBip21.Amount.Value.ToString(CultureInfo.InvariantCulture)}&pj={Uri.EscapeDataString(endpoint)}";
+
+		using var senderStore = PayjoinSenderSessionStore.FromFile(":memory:");
+		var payjoinClient = new Bip77PayjoinClient(
+			bip21ForFfi,
+			endpoint,
+			senderStore,
+			name => wasabi.HttpClientFactory.CreateClient(name),
+			wasabi.Wallet.WalletName,
+			Network.RegTest,
+			ohttpRelays: [_fixture.Relay.Url],
+			pollWindow: TimeSpan.FromSeconds(60));
+
+		var txParameters = new TransactionParameters(
+			new PaymentIntent(destination, invoiceAmount),
+			new FeeRate(2m),
+			AllowUnconfirmed: true,
+			AllowDoubleSpend: false,
+			AllowedInputs: null,
+			TryToSign: true,
+			OverrideFeeOverpaymentProtection: false);
+		var transactionFactory = new TransactionFactory(
+			Network.RegTest, wasabi.KeyManager, wasabi.Wallet.Coins, wasabi.TransactionStore, password: "");
+
+		// BuildTransaction negotiates the payjoin inline (the TryNegotiatePayjoin seam);
+		// Task.Run because the factory blocks on the network dialog.
+		BuildTransactionResult result = await Task.Run(
+			() => transactionFactory.BuildTransaction(txParameters, payjoinClient: payjoinClient)).ConfigureAwait(true);
+
+		// A silent degrade would still produce a valid (plain) tx; the round trip demands the
+		// negotiated payjoin. DowngradeReason is the user-visible degradation contract.
+		Assert.Null(payjoinClient.DowngradeReason);
+		Transaction payjoinTx = result.Transaction.Transaction;
+		Assert.True(payjoinTx.Inputs.Count > 1, $"Expected the receiver's input contribution (inputs > 1), got {payjoinTx.Inputs.Count}.");
+
+		// Broadcast like the send flow would (RPC broadcaster against the harness node).
+		await wasabi.Broadcaster.SendTransactionAsync(result.Transaction, CancellationToken.None).ConfigureAwait(true);
+		string txid = payjoinTx.GetHash().ToString();
+
+		await receiver.WaitForStdoutLineAsync(
+			line => line.Contains(PayjoinCliDriver.ResponseSuccessfulMarker, StringComparison.Ordinal) && line.Contains(txid, StringComparison.Ordinal),
+			MarkerTimeout,
+			$"receiver '{PayjoinCliDriver.ResponseSuccessfulMarker}' with txid {txid}").ConfigureAwait(true);
+
+		await AssertPayjoinTransactionShapeAsync(_fixture.BankRpc, txid, bip21).ConfigureAwait(true);
+
+		// Async completion on the cli side: confirm, then a resume closes the session.
+		receiver.Kill();
+		await _fixture.MineAsync(1).ConfigureAwait(true);
+		using LineBufferedProcess receiverDone = receiverDriver.StartResume();
+		await receiverDone.WaitForStdoutLineAsync(
+			line => line.EndsWith(PayjoinCliDriver.SessionCompletedMarker, StringComparison.Ordinal),
+			MarkerTimeout,
+			$"receiver resume '{PayjoinCliDriver.SessionCompletedMarker}'").ConfigureAwait(true);
 	}
 
 	private async Task<HarnessRoles> SetUpRolesAsync(string testName)

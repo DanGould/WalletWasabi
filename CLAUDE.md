@@ -58,12 +58,12 @@ nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
 
 # One-time: build the TLS TestServices shim (in-repo, ~27 s warm; see contrib/payjoin-fixture/README.md):
 nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
-  'cd /home/claude-agent/payjoin/external-integrations/WalletWasabi-wt-bip77-harness && cargo build --manifest-path contrib/payjoin-fixture/Cargo.toml'
+  'cd /home/claude-agent/payjoin/external-integrations/WalletWasabi-wt-bip77 && cargo build --manifest-path contrib/payjoin-fixture/Cargo.toml'
 
 # Run the harness (~31 s wall; needs the #csharp shell for BITCOIND_EXE — the bundled
 # generic-linux bitcoind cannot exec on NixOS; overrides: PAYJOIN_CLI_BIN, PAYJOIN_MAILROOM_BIN):
 nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
-  'cd /home/claude-agent/payjoin/external-integrations/WalletWasabi-wt-bip77-harness && dotnet test WalletWasabi.IntegrationTests/WalletWasabi.IntegrationTests.csproj --filter "Category=PayjoinHarness"'
+  'cd /home/claude-agent/payjoin/external-integrations/WalletWasabi-wt-bip77 && dotnet test WalletWasabi.IntegrationTests/WalletWasabi.IntegrationTests.csproj --filter "Category=PayjoinHarness"'
 ```
 
 Environment traps the harness already handles (do not "simplify" them away):
