@@ -73,8 +73,10 @@ public partial class SendViewModel : RoutableViewModel
 	[AutoNotify] private bool _isBip21;
 
 	private readonly Subject<Unit> _recipientsChanged = new();
+	private readonly Subject<Unit> _parseSettled = new();
 	private readonly ObservableCollection<RecipientRowViewModel> _additionalRecipients;
 	private bool _isRecalculating;
+	private bool _skipNextToReparse;
 
 	public SendViewModel(UiContext uiContext, IWalletModel walletModel, SendFlowModel parameters, ShowQrCodeCameraDialog showQrCodeCameraDialog) : base(uiContext)
 	{
@@ -113,7 +115,19 @@ public partial class SendViewModel : RoutableViewModel
 		this.WhenAnyValue(x => x.To)
 			.Skip(1)
 			.ObserveOn(RxApp.MainThreadScheduler)
-			.Subscribe((x) => TryParseUrl(x));
+			.Subscribe(x =>
+			{
+				// A To rewrite from within TryParseUrl must not re-enter the parser:
+				// the re-parse would see the bare address and reset the payjoin state
+				// (PayJoinEndPoint, _parsedAddress) that the parse just established.
+				if (_skipNextToReparse)
+				{
+					_skipNextToReparse = false;
+					return;
+				}
+
+				TryParseUrl(x);
+			});
 
 		this.WhenAnyValue(x => x.PayJoinEndPoint)
 			.Subscribe(endPoint => IsPayJoin = endPoint is { });
@@ -167,6 +181,7 @@ public partial class SendViewModel : RoutableViewModel
 
 		var nextCommandCanExecute = primaryChanged
 			.Merge(_recipientsChanged)
+			.Merge(_parseSettled)
 			.Select(_ =>
 			{
 				var allFilled = !string.IsNullOrEmpty(To) && AmountBtc > 0;
@@ -436,7 +451,7 @@ public partial class SendViewModel : RoutableViewModel
 		}
 	}
 
-	private IPayjoinClient? GetPayjoinClient(string? endPoint)
+	internal IPayjoinClient? GetPayjoinClient(string? endPoint)
 	{
 		if (!string.IsNullOrWhiteSpace(endPoint) &&
 			Uri.IsWellFormedUriString(endPoint, UriKind.Absolute))
@@ -560,7 +575,7 @@ public partial class SendViewModel : RoutableViewModel
 		{
 			errors.Add(ErrorSeverity.Error, "Payjoin is not possible with hardware wallets.");
 		}
-		else if (parseResult.Value is Address.Bip21Uri { PayjoinEndpoint: { } pjEndpoint } &&
+		else if (ResolvePayjoinEndpoint(parseResult.Value) is { } pjEndpoint &&
 			Bip77UriParams.TryGetReceiverKey(pjEndpoint, out var receiverKey) &&
 			UiContext.Services.GetHostedService<PayjoinSenderManager>()?.SessionStore is { } sessionStore &&
 			sessionStore.TryFindSession(pjEndpoint, receiverKey, out var existingSession))
@@ -579,7 +594,52 @@ public partial class SendViewModel : RoutableViewModel
 		}
 	}
 
+	/// <summary>
+	/// The payjoin endpoint the To field currently stands for: taken from the URI when To
+	/// still holds one, or from the armed <see cref="PayJoinEndPoint"/> after
+	/// <see cref="TryParseUrlCore"/> rewrote To to the parsed URI's bare address. The
+	/// address comparison keeps a stale endpoint from leaking onto an unrelated address
+	/// the user typed over it.
+	/// </summary>
+	private string? ResolvePayjoinEndpoint(Address parsedTo)
+	{
+		return parsedTo switch
+		{
+			Address.Bip21Uri { PayjoinEndpoint: { } fromUri } => fromUri,
+			_ when PayJoinEndPoint is { } armed &&
+				_parsedAddress is Address.Bip21Uri parsedBip21 &&
+				To?.Trim() == parsedBip21.Address.ToWif(_walletModel.Network) => armed,
+			_ => null,
+		};
+	}
+
 	private bool TryParseUrl(string? text)
+	{
+		var result = TryParseUrlCore(text);
+
+		// ValidateToField may have run while this parse was still mutating state (a To
+		// rewrite raises its validation before PayJoinEndPoint is assigned). Re-run it
+		// against the settled state and let NextCommand's canExecute pick up the result.
+		Revalidate(nameof(To));
+		_parseSettled.OnNext(Unit.Default);
+
+		return result;
+	}
+
+	/// <summary>
+	/// Rewrites To from within a parse without re-entering <see cref="TryParseUrlCore"/>
+	/// via the To subscription; see the guard in the constructor.
+	/// </summary>
+	private void SetToFromParse(string value)
+	{
+		if (To != value)
+		{
+			_skipNextToReparse = true;
+			To = value;
+		}
+	}
+
+	private bool TryParseUrlCore(string? text)
 	{
 		text = text?.Trim();
 
@@ -607,7 +667,7 @@ public partial class SendViewModel : RoutableViewModel
 					{
 						case Address.Bip21Uri bip21:
 							IsBip21 = true;
-							To = bip21.Address.ToWif(_walletModel.Network);
+							SetToFromParse(bip21.Address.ToWif(_walletModel.Network));
 
 							if (bip21.Amount is not null)
 							{
@@ -632,11 +692,11 @@ public partial class SendViewModel : RoutableViewModel
 							return true;
 
 						case Address.Bitcoin bitcoin:
-							To = bitcoin.Address.ToString();
+							SetToFromParse(bitcoin.Address.ToString());
 							return true;
 
 						case Address.SilentPayment silentPayment:
-							To = silentPayment.Address.ToWip(_walletModel.Network);
+							SetToFromParse(silentPayment.Address.ToWip(_walletModel.Network));
 							isSilentPayment = true;
 							return true;
 
