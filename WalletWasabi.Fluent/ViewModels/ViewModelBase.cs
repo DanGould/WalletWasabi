@@ -29,6 +29,16 @@ public class ViewModelBase : ReactiveObject, INotifyDataErrorInfo, IRegisterVali
 		_validations.Clear();
 	}
 
+	/// <summary>
+	/// Re-runs a property's registered validation method outside a property change,
+	/// for validators whose result depends on state that settles after the property
+	/// itself was assigned.
+	/// </summary>
+	protected void Revalidate(string propertyName)
+	{
+		_validations.ValidateProperty(propertyName);
+	}
+
 	private void OnValidations_ErrorsChanged(object? sender, DataErrorsChangedEventArgs e)
 	{
 		ErrorsChanged?.Invoke(this, new DataErrorsChangedEventArgs(e.PropertyName));
