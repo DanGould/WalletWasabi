@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Pre-commit hook for the BIP 77 payjoin integration work (agent-authored, 2026-07-19).
+# Install (writing .git/hooks was permission-blocked for the pre-code agent session):
+#   cp .githooks/pre-commit "$(git rev-parse --git-path hooks)/pre-commit" && chmod +x "$(git rev-parse --git-path hooks)/pre-commit"
+# (Hooks are shared across this clone's worktrees; do NOT set core.hooksPath.)
+#
+# Fast junk-blocker only (<1s). Wasabi has no fast repo-native format/lint gate
+# (formatting is IDE-side: CodeMaid/.editorconfig; no dotnet-format config, and a
+# dotnet build is too slow for a hook). The REAL gates run pre-handoff:
+#   dev loop : nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command \
+#                bash -c 'dotnet test WalletWasabi.Tests/WalletWasabi.Tests.csproj --filter "FullyQualifiedName~UnitTests"'
+#   CI parity: nix build --print-build-logs .#all   (builds + unit AND integration tests)
+set -euo pipefail
+
+fail=0
+
+# 1) Block merge conflict markers in staged text files.
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+if [ -n "$staged" ]; then
+	while IFS= read -r f; do
+		[ -z "$f" ] && continue
+		# Skip binaries (bundled apps, images, native libs).
+		case "$f" in
+			*BundledApps/Binaries/*|*.png|*.ico|*.icns|*.dll|*.so|*.dylib) continue ;;
+		esac
+		if git show ":$f" | grep -qE '^(<{7}( |$)|={7}$|>{7}( |$))'; then
+			echo "pre-commit: merge conflict marker in staged file: $f" >&2
+			fail=1
+		fi
+	done <<< "$staged"
+fi
+
+# 2) Block obvious junk files.
+junk=$(printf '%s\n' "$staged" | grep -E '\.(orig|rej|swp)$|(^|/)\.DS_Store$' || true)
+if [ -n "$junk" ]; then
+	echo "pre-commit: junk files staged:" >&2
+	printf '%s\n' "$junk" >&2
+	fail=1
+fi
+
+# 3) Reminders (non-blocking).
+if printf '%s\n' "$staged" | grep -q '\.cs$'; then
+	echo "pre-commit reminder: behavior-changing commits need a test (or an entry in TODO-TESTS.md)." >&2
+	echo "pre-commit reminder: run the unit-test gate before hand-off (see comments in this hook)." >&2
+fi
+
+exit $fail
