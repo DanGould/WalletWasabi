@@ -41,6 +41,50 @@ nix build --print-build-logs .#all
 # must be trait-excluded to match the flake's checkPhase filter (meta decision E3).
 ```
 
+## payjoin-cli integration harness (lane W3; verified on valley 2026-07-19)
+
+Lives in `WalletWasabi.IntegrationTests/Payjoin/`, all tests
+`[Trait("Category", "PayjoinHarness")]`. EXCLUDED from the sandboxed
+`nix build .#all` checkPhase (`--filter "Category!=PayjoinHarness"` in flake.nix — a
+canary test fails the build if that filter is ever dropped). Valley-only, hermetic,
+loopback-only; spawns regtest bitcoind + 2 payjoin-mailroom processes (directory and
+relay MUST be separate instances: shared sentinel tag 403s same-instance self-loops) +
+payjoin-cli per role.
+
+```bash
+# One-time: build fixture binaries from the PINNED worktree (~25 s warm):
+nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
+  'cd /home/claude-agent/payjoin/rust-payjoin-wt-wasabi-ffi && cargo build -p payjoin-cli --features _manual-tls,v1 -p payjoin-mailroom'
+
+# One-time: build the TLS TestServices shim (in-repo, ~27 s warm; see contrib/payjoin-fixture/README.md):
+nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
+  'cd /home/claude-agent/payjoin/external-integrations/WalletWasabi-wt-bip77 && cargo build --manifest-path contrib/payjoin-fixture/Cargo.toml'
+
+# Run the harness (~31 s wall; needs the #csharp shell for BITCOIND_EXE — the bundled
+# generic-linux bitcoind cannot exec on NixOS; overrides: PAYJOIN_CLI_BIN, PAYJOIN_MAILROOM_BIN):
+nix develop /home/claude-agent/payjoin/rust-payjoin#csharp --command bash -c \
+  'cd /home/claude-agent/payjoin/external-integrations/WalletWasabi-wt-bip77 && dotnet test WalletWasabi.IntegrationTests/WalletWasabi.IntegrationTests.csproj --filter "Category=PayjoinHarness"'
+```
+
+Environment traps the harness already handles (do not "simplify" them away):
+- Host proxy env (`http_proxy=127.0.0.1:3128`) intercepts loopback HTTP and 403s it.
+  The fixture nulls `HttpClient.DefaultProxy` process-wide and scrubs proxy vars from
+  every child process env.
+- OHTTP-keys are pre-fetched from the directory `/ohttp-keys` into a file passed to the
+  receiver (`--ohttp-keys`-equivalent config): the relay-proxied bootstrap only works via
+  CONNECT/WS tunneling to https gateways; over plain HTTP the combined directory+relay
+  binary answers proxy-form GETs with its OWN keys ("key identifier unknown" errors).
+- Two topologies: plain-HTTP (stock mailroom binaries — degradation path) AND TLS via
+  `contrib/payjoin-fixture` (TestServices shim; approved meta answer in
+  `briefs/2026-07-19/wasabi-integration/questions-W3.md`). The standalone mailroom
+  binary cannot serve manual TLS (`serve_manual_tls` is a `_manual-tls` library fn
+  main() never calls) and its relay outgoing client trusts webpki roots only.
+- payjoin-cli's config-file `root_certificate` key is silently ignored at the pin —
+  pass `--root-certificate` as a CLI flag (the driver does).
+- Out-of-workspace cargo builds do NOT inherit rust-payjoin's `[patch.crates-io]`:
+  any crate depending on payjoin-test-utils/payjoin-mailroom by version silently pulls
+  crates.io releases instead of the pin. The shim's Cargo.toml mirrors the patch.
+
 Pre-commit hook: `.githooks/pre-commit` (junk-blocker + reminders). Install once per clone:
 `cp .githooks/pre-commit "$(git rev-parse --git-path hooks)/pre-commit" && chmod +x $_`
 Real gates run pre-handoff, not per-commit (no fast repo-native format gate exists).

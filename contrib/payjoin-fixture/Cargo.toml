@@ -1,0 +1,28 @@
+[package]
+name = "payjoin-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "payjoin-test-utils TestServices as a standalone binary for the Wasabi payjoin integration harness"
+
+[dependencies]
+# A1 (dev-reproducible, this machine): path dep on the pinned rust-payjoin worktree
+# (upstream master d27b7b137c9e8696ad6bf542ba0c1bf93665df72). Requires the sibling
+# checkout layout <meta-root>/rust-payjoin-wt-wasabi-ffi next to
+# <meta-root>/external-integrations/<this repo>.
+#
+# A2 (portable) swap — use this form if the branch travels beyond this machine:
+# payjoin-test-utils = { git = "https://github.com/payjoin/rust-payjoin", rev = "d27b7b137c9e8696ad6bf542ba0c1bf93665df72" }
+payjoin-test-utils = { path = "../../../../rust-payjoin-wt-wasabi-ffi/payjoin-test-utils" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Standalone crate: never join a parent cargo workspace.
+[workspace]
+
+# The rust-payjoin workspace's [patch.crates-io] does not apply to out-of-workspace
+# builds, so without this section payjoin/payjoin-mailroom would resolve from crates.io
+# instead of the pinned worktree (violating the pin AND changing fixture behavior).
+# Keep in sync with the dependency form above when swapping A1 -> A2.
+[patch.crates-io]
+payjoin = { path = "../../../../rust-payjoin-wt-wasabi-ffi/payjoin" }
+payjoin-mailroom = { path = "../../../../rust-payjoin-wt-wasabi-ffi/payjoin-mailroom" }
